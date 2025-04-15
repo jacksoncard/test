@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cosmo's House Escape</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Creepster&family=Press+Start+2P&display=swap" rel="stylesheet">
+    <style>
+        /* Basic Scary Styling */
+        body {
+            font-family: 'Press Start 2P', cursive;
+            background-color: #1a1a1a; /* Dark background */
+            color: #e0e0e0; /* Light text */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+            margin: 0;
+        }
+        canvas {
+            background-color: #2a2a2a; /* Dark canvas */
+            display: block;
+            border: 3px solid #ff0000; /* Red border */
+            box-shadow: 0 0 15px rgba(255, 0, 0, 0.4); /* Red glow */
+            margin: 0 auto;
+            max-width: 100%;
+            max-height: 80vh;
+            aspect-ratio: 4 / 3;
+        }
+        .game-container {
+            text-align: center;
+            width: 90%;
+            max-width: 800px;
+        }
+        .ui-element {
+            font-size: 1rem;
+            margin: 5px 10px;
+            color: #ff4444; /* Reddish UI text */
+            text-shadow: 1px 1px 2px black;
+        }
+        .game-title {
+            font-family: 'Creepster', cursive;
+            font-size: 3.5rem;
+            color: #ff0000;
+            margin-bottom: 15px;
+            text-shadow: 3px 3px 5px black;
+        }
+        .start-screen, .game-over-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background-color: rgba(0, 0, 0, 0.9);
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            z-index: 10; padding: 20px; box-sizing: border-box; text-align: center;
+        }
+        .difficulty-buttons button, .control-buttons button {
+            font-family: 'Press Start 2P', cursive; background-color: #440000; color: #ffcccc;
+            border: 2px solid #ff0000; padding: 10px 20px; margin: 10px; cursor: pointer;
+            transition: background-color 0.3s, transform 0.1s; border-radius: 5px; box-shadow: 0 4px #8b0000;
+        }
+        .difficulty-buttons button:hover, .control-buttons button:hover { background-color: #660000; }
+        .difficulty-buttons button:active, .control-buttons button:active { transform: translateY(2px); box-shadow: 0 2px #8b0000; }
+        .blackout-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background-color: black; z-index: 15; display: none; opacity: 0;
+            transition: opacity 0.5s ease-in-out; pointer-events: none;
+        }
+    </style>
+</head>
+<h1>Cosmo Chase</h1>
+<body>
+    <div class="game-container">
+        <h1 class="game-title">Cosmo's House Escape</h1>
+        <div class="flex flex-wrap justify-center items-center mb-4">
+            <span class="ui-element">Lives: <span id="lives">3</span></span>
+            <span class="ui-element">Score: <span id="score">0</span></span>
+            <span class="ui-element">Difficulty: <span id="difficulty-display">Medium</span></span>
+        </div>
+        <canvas id="gameCanvas"></canvas>
+        <div id="startScreen" class="start-screen">
+            <h2 class="text-3xl text-red-500 mb-6">Select Difficulty</h2>
+            <div class="difficulty-buttons">
+                <button onclick="startGame('easy')">Easy</button>
+                <button onclick="startGame('medium')">Medium</button>
+                <button onclick="startGame('hard')">Hard</button>
+            </div>
+            <p class="mt-8 text-gray-400 text-lg">Use W, A, S, D to move. Survive!</p>
+        </div>
+        <div id="gameOverScreen" class="game-over-screen" style="display: none;">
+            <h2 class="game-title text-6xl text-red-600 mb-6">GAME OVER</h2>
+            <p class="text-2xl mb-4">Cosmo got you!</p>
+            <p class="text-xl mb-6">Final Score: <span id="finalScore">0</span></p>
+            <div class="control-buttons">
+                <button onclick="restartGame()">Try Again?</button>
+            </div>
+        </div>
+        <div id="blackoutScreen" class="blackout-screen"></div>
+    </div>
+
+    <script>
+        // --- Elements ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const startScreen = document.getElementById('startScreen');
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const blackoutScreen = document.getElementById('blackoutScreen');
+        const livesDisplay = document.getElementById('lives');
+        const scoreDisplay = document.getElementById('score');
+        const finalScoreDisplay = document.getElementById('finalScore');
+        const difficultyDisplay = document.getElementById('difficulty-display');
+
+        // --- Game State ---
+        let player, cosmo, walls;
+        let lives = 3;
+        let score = 0;
+        let gameRunning = false;
+        let difficulty = 'medium'; // Default
+        let scoreInterval;
+        let animationFrameId;
+        let keysPressed = {}; // Stores lowercase keys pressed
+        let isCaught = false; // Flag for catch sequence
+
+        // --- Game Settings ---
+        const playerSize = 20;
+        const cosmoSize = 25;
+        const playerSpeed = 4; // Player speed is constant
+        const wallThickness = 10;
+        const difficultySettings = {
+            easy: { speed: 1.5, name: 'Easy' },    // Cosmo's speed
+            medium: { speed: 2.5, name: 'Medium' },
+            hard: { speed: 3.5, name: 'Hard' }
+        };
+        const catchSequenceDuration = 1000; // ms for blackout
+
+        // --- Utility Functions ---
+        function checkCollision(rect1, rect2) {
+            return rect1.x < rect2.x + rect2.width &&
+                   rect1.x + rect1.width > rect2.x &&
+                   rect1.y < rect2.y + rect2.height &&
+                   rect1.y + rect1.height > rect2.y;
+        }
+
+        // --- Initialization ---
+        function init() {
+            // Resize canvas
+            const containerWidth = canvas.parentElement.clientWidth;
+            canvas.width = containerWidth;
+            canvas.height = containerWidth * (3 / 4);
+            if (canvas.height > window.innerHeight * 0.8) {
+                canvas.height = window.innerHeight * 0.8;
+                canvas.width = canvas.height * (4 / 3);
+            }
+
+            // Player starting position (center left)
+            player = {
+                x: wallThickness + 50,
+                y: canvas.height / 2 - playerSize / 2,
+                width: playerSize, height: playerSize,
+                color: '#33ff33' // Bright green player
+            };
+
+            // Cosmo starting position (center right)
+            cosmo = {
+                x: canvas.width - wallThickness - 50 - cosmoSize,
+                y: canvas.height / 2 - cosmoSize / 2,
+                width: cosmoSize, height: cosmoSize,
+                color: '#ff8c00', // Orange Cosmo
+                speed: difficultySettings[difficulty].speed // Set speed based on difficulty
+            };
+
+            // Walls - Simple layout: Outer boundary + one vertical divider
+            walls = [
+                // Outer walls
+                { x: 0, y: 0, width: canvas.width, height: wallThickness }, // Top
+                { x: 0, y: canvas.height - wallThickness, width: canvas.width, height: wallThickness }, // Bottom
+                { x: 0, y: 0, width: wallThickness, height: canvas.height }, // Left
+                { x: canvas.width - wallThickness, y: 0, width: wallThickness, height: canvas.height }, // Right
+                // Simple vertical divider (example) - creates two "rooms"
+                { x: canvas.width / 2 - wallThickness / 2, y: wallThickness, width: wallThickness, height: canvas.height / 3 }, // Top part
+                { x: canvas.width / 2 - wallThickness / 2, y: canvas.height - wallThickness - canvas.height / 3, width: wallThickness, height: canvas.height / 3 } // Bottom part (gap in middle)
+            ];
+
+            // Reset UI and state variables
+            score = 0;
+            livesDisplay.textContent = lives;
+            scoreDisplay.textContent = score;
+            difficultyDisplay.textContent = difficultySettings[difficulty].name;
+            keysPressed = {};
+            isCaught = false;
+            blackoutScreen.style.display = 'none'; // Ensure blackout is hidden
+            console.log("Game Initialized");
+        }
+
+        // --- Drawing Functions ---
+        function drawRect(x, y, width, height, color) {
+            ctx.fillStyle = color;
+            ctx.fillRect(x, y, width, height);
+        }
+
+        function drawWalls() {
+            walls.forEach(wall => {
+                drawRect(wall.x, wall.y, wall.width, wall.height, '#888'); // Grey walls
+            });
+        }
+
+        // --- Movement & Collision (Simplified) ---
+        function movePlayer() {
+            let dx = 0;
+            let dy = 0;
+
+            if (keysPressed['w']) dy = -1;
+            if (keysPressed['s']) dy = 1;
+            if (keysPressed['a']) dx = -1;
+            if (keysPressed['d']) dx = 1;
+
+            if (dx === 0 && dy === 0) return; // No movement keys pressed
+
+            // Normalize diagonal speed
+            if (dx !== 0 && dy !== 0) {
+                const magnitude = Math.sqrt(2);
+                dx /= magnitude;
+                dy /= magnitude;
+            }
+
+            let nextX = player.x + dx * playerSpeed;
+            let nextY = player.y + dy * playerSpeed;
+
+            // Create a temporary rectangle for the next position
+            const nextPlayerRect = { x: nextX, y: nextY, width: player.width, height: player.height };
+
+            // Check for collisions with walls
+            let collision = false;
+            for (const wall of walls) {
+                if (checkCollision(nextPlayerRect, wall)) {
+                    collision = true;
+                    break;
+                }
+            }
+
+            // Only update position if there's no collision
+            if (!collision) {
+                player.x = nextX;
+                player.y = nextY;
+            } else {
+                 // Optional: Try moving only on X or Y axis if combined move failed (basic slide)
+                 // Check X only
+                 const nextXRect = { ...nextPlayerRect, y: player.y };
+                 let collisionX = false;
+                 for (const wall of walls) { if (checkCollision(nextXRect, wall)) { collisionX = true; break; } }
+                 if (!collisionX) {
+                     player.x = nextX; // Allow X move
+                 }
+                 // Check Y only (using potentially updated X)
+                 const nextYRect = { ...nextPlayerRect, x: player.x };
+                 let collisionY = false;
+                 for (const wall of walls) { if (checkCollision(nextYRect, wall)) { collisionY = true; break; } }
+                 if (!collisionY) {
+                     player.y = nextY; // Allow Y move
+                 }
+            }
+
+            // Ensure player stays within canvas bounds (redundant with outer walls, but safe)
+            player.x = Math.max(wallThickness, Math.min(canvas.width - wallThickness - player.width, player.x));
+            player.y = Math.max(wallThickness, Math.min(canvas.height - wallThickness - player.height, player.y));
+        }
+
+        function moveCosmo() {
+            // Simple AI: Move directly towards the player's center
+            const targetX = player.x + player.width / 2;
+            const targetY = player.y + player.height / 2;
+            const currentX = cosmo.x + cosmo.width / 2;
+            const currentY = cosmo.y + cosmo.height / 2;
+
+            const angle = Math.atan2(targetY - currentY, targetX - currentX);
+            const dx = Math.cos(angle);
+            const dy = Math.sin(angle);
+
+            let nextX = cosmo.x + dx * cosmo.speed;
+            let nextY = cosmo.y + dy * cosmo.speed;
+
+            const nextCosmoRect = { x: nextX, y: nextY, width: cosmo.width, height: cosmo.height };
+
+            // Check for collisions with walls
+            let collision = false;
+            for (const wall of walls) {
+                if (checkCollision(nextCosmoRect, wall)) {
+                    collision = true;
+                    break;
+                }
+            }
+
+            // Move if no collision
+            if (!collision) {
+                cosmo.x = nextX;
+                cosmo.y = nextY;
+            } else {
+                 // Basic wall avoidance: Try moving only horizontally or vertically if blocked
+                 // Check X only
+                 const nextXRect = { ...nextCosmoRect, y: cosmo.y };
+                 let collisionX = false;
+                 for (const wall of walls) { if (checkCollision(nextXRect, wall)) { collisionX = true; break; } }
+                 if (!collisionX) {
+                     cosmo.x = nextX; // Allow X move
+                 }
+                 // Check Y only (using potentially updated X)
+                 const nextYRect = { ...nextCosmoRect, x: cosmo.x };
+                 let collisionY = false;
+                 for (const wall of walls) { if (checkCollision(nextYRect, wall)) { collisionY = true; break; } }
+                 if (!collisionY) {
+                     cosmo.y = nextY; // Allow Y move
+                 }
+            }
+             // Ensure cosmo stays within canvas bounds
+            cosmo.x = Math.max(wallThickness, Math.min(canvas.width - wallThickness - cosmo.width, cosmo.x));
+            cosmo.y = Math.max(wallThickness, Math.min(canvas.height - wallThickness - cosmo.height, cosmo.y));
+        }
+
+        // --- Catch Sequence & Game Over ---
+        function handleCatch() {
+            if (isCaught) return; // Prevent multiple triggers
+            console.log("Caught!");
+            isCaught = true;
+            gameRunning = false; // Stop game logic
+            cancelAnimationFrame(animationFrameId);
+            clearInterval(scoreInterval);
+
+            lives--;
+            livesDisplay.textContent = lives;
+
+            // Show blackout screen
+            blackoutScreen.style.display = 'block';
+            requestAnimationFrame(() => { // Ensure display:block is applied before opacity change
+                 blackoutScreen.style.opacity = '1';
+            });
+
+
+            // After a delay, either reset or game over
+            setTimeout(() => {
+                if (lives <= 0) {
+                    gameOver();
+                } else {
+                    resetLevel(); // Reset positions etc.
+                    // Fade out blackout screen
+                    blackoutScreen.style.opacity = '0';
+                    setTimeout(() => {
+                        blackoutScreen.style.display = 'none';
+                        isCaught = false;
+                        gameRunning = true; // Resume game logic
+                        startGameLoop(); // Restart the animation loop
+                        startScoreTimer(); // Restart score timer
+                    }, 500); // Match CSS transition duration
+                }
+            }, catchSequenceDuration);
+        }
+
+        function resetLevel() {
+            // Reset player and Cosmo positions
+            player.x = wallThickness + 50;
+            player.y = canvas.height / 2 - playerSize / 2;
+            cosmo.x = canvas.width - wallThickness - 50 - cosmoSize;
+            cosmo.y = canvas.height / 2 - cosmoSize / 2;
+            keysPressed = {}; // Clear inputs
+            console.log("Level Reset");
+        }
+
+        function gameOver() {
+            console.log("Game Over");
+            gameRunning = false; // Ensure game is stopped
+            cancelAnimationFrame(animationFrameId); // Stop loop if somehow running
+            clearInterval(scoreInterval); // Stop score
+            finalScoreDisplay.textContent = score;
+            gameOverScreen.style.display = 'flex'; // Show game over screen
+            blackoutScreen.style.display = 'none'; // Hide blackout if game over happens directly
+        }
+
+        function restartGame() {
+            console.log("Restarting Game");
+            gameOverScreen.style.display = 'none';
+            startScreen.style.display = 'flex'; // Show start screen again
+            lives = 3; // Fully reset lives
+            score = 0; // Fully reset score
+            // init() will be called by startGame when difficulty is selected
+        }
+
+        // --- Game Loop ---
+        function gameLoop() {
+            if (!gameRunning || isCaught) {
+                return; // Don't run if paused or during catch sequence
+            }
+
+            // 1. Clear Canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+             // Optional: Subtle flicker for atmosphere
+            const flickerAlpha = 0.01 + Math.random() * 0.015;
+            ctx.fillStyle = `rgba(50, 0, 0, ${flickerAlpha})`; // Very subtle dark red flicker
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+
+            // 2. Update Positions
+            movePlayer();
+            moveCosmo();
+
+            // 3. Check Player-Cosmo Collision
+            if (checkCollision(player, cosmo)) {
+                handleCatch(); // Start the catch sequence
+                return; // Stop this frame processing
+            }
+
+            // 4. Draw Everything
+            drawWalls();
+            drawRect(cosmo.x, cosmo.y, cosmo.width, cosmo.height, cosmo.color); // Draw Cosmo
+            drawRect(player.x, player.y, player.width, player.height, player.color); // Draw Player
+
+            // 5. Request Next Frame
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        // --- Start/Stop Helpers ---
+        function startGameLoop() {
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId); // Clear previous loop if any
+            }
+            console.log("Starting Game Loop");
+            gameRunning = true; // Ensure game is marked as running
+            isCaught = false;
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        function startScoreTimer() {
+            if (scoreInterval) {
+                clearInterval(scoreInterval); // Clear previous timer if any
+            }
+            scoreInterval = setInterval(() => {
+                if (gameRunning && !isCaught) {
+                    score++;
+                    scoreDisplay.textContent = score;
+                }
+            }, 1000); // Increment score every second
+        }
+
+        // --- Event Listeners ---
+        window.addEventListener('keydown', (e) => {
+            if (gameRunning && !isCaught) { // Only handle keys if game is active
+                const key = e.key.toLowerCase();
+                keysPressed[key] = true;
+                // Prevent default scroll for arrow keys and space
+                if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'w', 'a', 's', 'd', ' '].includes(key)) {
+                    e.preventDefault();
+                }
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            // Always register keyup to prevent stuck keys
+            const key = e.key.toLowerCase();
+            keysPressed[key] = false;
+        });
+
+         // Handle window resize - Re-initialize layout
+        window.addEventListener('resize', () => {
+            console.log("Window resized");
+             // Only re-init fully if on start/game over screen to avoid disrupting gameplay
+            if (!gameRunning || gameOverScreen.style.display === 'flex') {
+                 init();
+                 // If game over screen is visible, redraw it potentially
+                 if (gameOverScreen.style.display === 'flex') {
+                    // May need to redraw static elements if canvas size changed drastically
+                 }
+            } else {
+                console.warn("Resize during gameplay - layout might be off until reset.");
+                // Could potentially pause the game here
+            }
+        });
+
+
+        // --- Game Start Function ---
+        function startGame(selectedDifficulty) {
+            console.log(`Starting game with difficulty: ${selectedDifficulty}`);
+            difficulty = selectedDifficulty;
+            lives = 3; // Reset lives for new game
+            score = 0; // Reset score for new game
+            init(); // Initialize game elements and positions based on new difficulty/size
+            startScreen.style.display = 'none'; // Hide start screen
+            gameOverScreen.style.display = 'none'; // Ensure game over screen is hidden
+            startGameLoop(); // Start the main game loop
+            startScoreTimer(); // Start the score counter
+        }
+
+        // --- Initial Setup On Load ---
+        window.onload = () => {
+             console.log("Window Loaded");
+             init(); // Set up initial canvas size and elements, but don't start game
+        };
+
+    </script>
+</body>
+</html>
